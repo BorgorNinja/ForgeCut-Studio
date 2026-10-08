@@ -23,12 +23,14 @@ ForgeCut Studio is a lightweight native Android video editor built with Jetpack 
   * Millisecond-accurate clip trimming using Material 3 `RangeSlider`
   * Real-time preview player with synchronized clip playback
   * Hardware-accelerated MP4 (H.264 / AAC) export direct to device gallery
-* **Phase 2: Transitions & Motion** *(In Progress)*
-  * Transitions between clips
-  * Text overlays and title cards
-  * Clip speed adjustment (slow motion / fast forward)
-  * Keyframes and spatial transforms (pan, zoom, rotate)
-  * Multi-track audio mixer and volume fades
+* **Phase 2: Timeline Tools & Enhanced Preview (v0.2.0)** *(Completed)*
+  * Custom dark editing theme with responsive transport controls
+  * Multi-step state history with undo support
+  * Playhead split tool (`splitAt`) for dynamic clip cutting
+  * Clip duplication, reordering, and deletion
+  * Per-clip audio muting for preview and export
+  * Real-time video thumbnail strip on timeline cards
+  * Export modal with H.264 vs H.265 selection, live progress indicator, and cancellation
 * **Phase 3: Color & VFX** *(Planned)*
   * Color grading and LUTs
   * Chroma key (green screen)
