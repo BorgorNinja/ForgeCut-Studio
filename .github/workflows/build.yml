@@ -41,19 +41,28 @@ jobs:
             "https://github.com/${{ github.repository }}/releases/download/ffmpeg-android/libffmpeg.so" \
             || { echo "No FFmpeg engine yet - building without it"; rm -f app/src/main/jniLibs/arm64-v8a/libffmpeg.so; }
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+      - name: Build APKs (Release & Debug)
+        run: ./gradlew assembleRelease assembleDebug --no-daemon --stacktrace
 
       - name: Prepare APK Output
         run: |
           mkdir -p out
-          cp app/build/outputs/apk/debug/app-debug.apk out/ForgeCut.apk
+          cp app/build/outputs/apk/release/app-release.apk out/ForgeCut-Release.apk
+          cp app/build/outputs/apk/debug/app-debug.apk out/ForgeCut-Debug.apk
+          cp out/ForgeCut-Release.apk out/ForgeCut.apk
 
-      - name: Upload APK Artifact
+      - name: Upload Release APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ForgeCut-Release-APK
+          path: out/ForgeCut-Release.apk
+          retention-days: 14
+
+      - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ForgeCut-Debug-APK
-          path: out/ForgeCut.apk
+          path: out/ForgeCut-Debug.apk
           retention-days: 14
 
       - name: Point latest tag to current commit
@@ -73,7 +82,10 @@ jobs:
             Automated build from commit ${{ github.sha }}
             
             Branch: ${{ github.ref_name }}
-          files: out/ForgeCut.apk
+          files: |
+            out/ForgeCut-Release.apk
+            out/ForgeCut-Debug.apk
+            out/ForgeCut.apk
           prerelease: false
           make_latest: true
         env:
