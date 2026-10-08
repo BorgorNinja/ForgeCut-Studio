@@ -29,6 +29,8 @@ import java.io.File
 
 class MainActivity : ComponentActivity() {
     private var transformer: Transformer? = null
+    private var ffProcess: Process? = null
+    private var cancelled = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -47,6 +49,10 @@ class MainActivity : ComponentActivity() {
         var exporting by remember { mutableStateOf(false) }
         var progress by remember { mutableFloatStateOf(0f) }
         var useH265 by remember { mutableStateOf(false) }
+        val ffmpegReady = remember { FfmpegExport.binary(ctx) != null }
+
+        fun needsFfmpeg() = state.texts.isNotEmpty() || state.clips.any { it.transition != TransitionType.NONE }
+        fun say(msg: String) { scope.launch { snackbar.showSnackbar(msg) } }
 
         val picker = rememberLauncherForActivityResult(
             ActivityResultContracts.PickMultipleVisualMedia(20)
@@ -54,8 +60,10 @@ class MainActivity : ComponentActivity() {
             scope.launch {
                 val added = withContext(Dispatchers.IO) {
                     uris.mapNotNull { u ->
-                        val d = durationOf(ctx, u)
-                        if (d > 0) Clip(IdGen.next(), u, d, 0, d) else null
+                        probe(ctx, u)?.let { p ->
+                            Clip(IdGen.next(), u, p.durationMs, 0, p.durationMs,
+                                hasAudio = p.hasAudio, dispW = p.w, dispH = p.h)
+                        }
                     }
                 }
                 state.addAll(added)
@@ -69,7 +77,8 @@ class MainActivity : ComponentActivity() {
             val holder = ProgressHolder()
             while (exporting) {
                 val t = transformer
-                if (t != null && t.getProgress(holder) != Transformer.PROGRESS_STATE_NOT_STARTED) {
+                if (t != null && ffProcess == null &&
+                    t.getProgress(holder) != Transformer.PROGRESS_STATE_NOT_STARTED) {
                     progress = holder.progress / 100f
                 }
                 delay(200)
@@ -78,25 +87,66 @@ class MainActivity : ComponentActivity() {
 
         EditorScreen(
             state = state, player = player, exporting = exporting, snackbar = snackbar,
-            onAdd = pick, onExport = { player.pause(); showExport = true }
+            onAdd = pick,
+            onExport = {
+                player.pause()
+                if (needsFfmpeg() && !ffmpegReady) {
+                    scope.launch {
+                        snackbar.showSnackbar(
+                            "Titles and transitions need the FFmpeg engine. Run “Build FFmpeg” on GitHub once, then rebuild (see README).",
+                            duration = SnackbarDuration.Long
+                        )
+                    }
+                } else showExport = true
+            }
         )
 
         if (showExport) {
+            val ff = needsFfmpeg()
             AlertDialog(
                 onDismissRequest = { showExport = false },
                 title = { Text("Export video") },
                 text = {
                     Column {
-                        FormatRow("H.264 · best compatibility", !useH265) { useH265 = false }
-                        FormatRow("H.265 · smaller file", useH265) { useH265 = true }
+                        if (ff) {
+                            Text("MP4 · H.264 · up to 1080p")
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "Titles/transitions use the FFmpeg engine. It is software-encoded, so it takes longer.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            FormatRow("H.264 · best compatibility", !useH265) { useH265 = false }
+                            FormatRow("H.265 · smaller file", useH265) { useH265 = true }
+                        }
                     }
                 },
                 confirmButton = {
                     Button(onClick = {
-                        showExport = false; exporting = true; progress = 0f
-                        startExport(ctx, state.clips.toList(), useH265) { msg ->
-                            exporting = false
-                            scope.launch { snackbar.showSnackbar(msg) }
+                        showExport = false; exporting = true; progress = 0f; cancelled = false
+                        val clips = state.clips.toList()
+                        if (ff) {
+                            scope.launch {
+                                val out = File(ctx.cacheDir, "forgecut_${System.currentTimeMillis()}.mp4")
+                                val res = withContext(Dispatchers.IO) {
+                                    FfmpegExport.run(ctx, clips, state.texts.toList(), out,
+                                        onProcess = { ffProcess = it }, onProgress = { progress = it })
+                                }
+                                ffProcess = null
+                                val msg = when {
+                                    cancelled -> "Export cancelled"
+                                    res.isSuccess -> {
+                                        val ok = withContext(Dispatchers.IO) { saveToMovies(ctx, out) }
+                                        if (ok) "Saved to Movies/ForgeCut" else "Export finished, but saving failed"
+                                    }
+                                    else -> "Export failed: ${res.exceptionOrNull()?.message}"
+                                }
+                                exporting = false
+                                say(msg)
+                            }
+                        } else {
+                            startMedia3Export(ctx, clips, useH265) { msg -> exporting = false; say(msg) }
                         }
                     }) { Text("Export") }
                 },
@@ -117,8 +167,11 @@ class MainActivity : ComponentActivity() {
                 },
                 confirmButton = {
                     TextButton(onClick = {
-                        transformer?.cancel(); exporting = false
-                        scope.launch { snackbar.showSnackbar("Export cancelled") }
+                        cancelled = true
+                        ffProcess?.destroy()
+                        if (ffProcess == null) {
+                            transformer?.cancel(); exporting = false; say("Export cancelled")
+                        }
                     }) { Text("Cancel") }
                 }
             )
@@ -136,7 +189,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startExport(ctx: Context, clips: List<Clip>, h265: Boolean, done: (String) -> Unit) {
+    private fun startMedia3Export(ctx: Context, clips: List<Clip>, h265: Boolean, done: (String) -> Unit) {
         val items = clips.map {
             EditedMediaItem.Builder(it.toMediaItem()).setRemoveAudio(it.muted).build()
         }
