@@ -185,7 +185,7 @@ fun EditorScreen(
                                         state.selectedTextId = null
                                     },
                                     onDragDelta = { dx, dy ->
-                                        state.updateOverlayPosition(ov.id, ov.posX + dx, ov.posY + dy)
+                                        state.moveOverlayDelta(ov.id, dx, dy)
                                     }
                                 )
                             }
@@ -202,7 +202,7 @@ fun EditorScreen(
                                         state.selectedOverlayId = null
                                     },
                                     onDragDelta = { dx, dy ->
-                                        state.updateTextPosition(t.id, t.posX + dx, t.posY + dy)
+                                        state.moveTextDelta(t.id, dx, dy)
                                     }
                                 )
                             }
@@ -468,6 +468,9 @@ private fun PreviewText(
     val rectWPx = with(d) { rectW.toPx() }
     val rectHPx = with(d) { rectH.toPx() }
 
+    val curOnSelect by rememberUpdatedState(onSelect)
+    val curOnDragDelta by rememberUpdatedState(onDragDelta)
+
     Box(
         Modifier
             .offset {
@@ -488,14 +491,14 @@ private fun PreviewText(
                 else Modifier.padding(4.dp)
             )
             .pointerInput(t.id, rectWPx, rectHPx) {
-                detectTapGestures { onSelect() }
+                detectTapGestures { curOnSelect() }
             }
             .pointerInput(t.id, rectWPx, rectHPx) {
                 detectDragGestures(
-                    onDragStart = { onSelect() },
+                    onDragStart = { curOnSelect() },
                     onDrag = { change, dragAmount ->
                         change.consume()
-                        onDragDelta(dragAmount.x / rectWPx, dragAmount.y / rectHPx)
+                        curOnDragDelta(dragAmount.x / rectWPx, dragAmount.y / rectHPx)
                     }
                 )
             }
@@ -526,6 +529,9 @@ private fun PreviewOverlay(
     val rectWPx = with(d) { rectW.toPx() }
     val rectHPx = with(d) { rectH.toPx() }
     val ovW = rectW * ov.scale
+
+    val curOnSelect by rememberUpdatedState(onSelect)
+    val curOnDragDelta by rememberUpdatedState(onDragDelta)
 
     val relMs = (globalPos - ov.startMs).coerceAtLeast(0L)
     val imageBitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(
@@ -562,14 +568,14 @@ private fun PreviewOverlay(
             .clip(RoundedCornerShape(6.dp))
             .background(Color.DarkGray.copy(alpha = 0.5f))
             .pointerInput(ov.id, rectWPx, rectHPx) {
-                detectTapGestures { onSelect() }
+                detectTapGestures { curOnSelect() }
             }
             .pointerInput(ov.id, rectWPx, rectHPx) {
                 detectDragGestures(
-                    onDragStart = { onSelect() },
+                    onDragStart = { curOnSelect() },
                     onDrag = { change, dragAmount ->
                         change.consume()
-                        onDragDelta(dragAmount.x / rectWPx, dragAmount.y / rectHPx)
+                        curOnDragDelta(dragAmount.x / rectWPx, dragAmount.y / rectHPx)
                     }
                 )
             }

@@ -65,12 +65,8 @@ object FfmpegExport {
         val args = mutableListOf(bin.absolutePath, "-y", "-loglevel", "error", "-nostats", "-progress", "pipe:1")
         files.forEach { args += listOf("-i", it.absolutePath) }
         titles.forEach { args += listOf("-i", it.second.absolutePath) }
-        ovFiles.forEach { (ov, f) ->
-            if (ov.type == OverlayType.IMAGE) {
-                args += listOf("-loop", "1", "-i", f.absolutePath)
-            } else {
-                args += listOf("-i", f.absolutePath)
-            }
+        ovFiles.forEach { (_, f) ->
+            args += listOf("-i", f.absolutePath)
         }
 
         // An input pad can only be used once, so split sources used by several clips
@@ -152,7 +148,7 @@ object FfmpegExport {
             } else {
                 sb.append("[$inputIdx:v]trim=start=0:end=$durSec,setpts=PTS-STARTPTS,scale=$targetW:-2,fps=30,format=yuv420p[$padV];")
             }
-            sb.append("[$curV][$padV]overlay=x='min(max(0,${w}*${ov.posX}-w/2),${w}-w)':y='min(max(0,${h}*${ov.posY}-h/2),${h}-h)':enable='between(t,${sec(s)},${sec(e)})'[$nextV];")
+            sb.append("[$curV][$padV]overlay=x='min(max(0,${w}*${ov.posX}-w/2),${w}-w)':y='min(max(0,${h}*${ov.posY}-h/2),${h}-h)':enable='between(t,${sec(s)},${sec(e)})':eof_action=repeat[$nextV];")
             curV = nextV
 
             if (ov.type == OverlayType.VIDEO && !ov.muted) {
@@ -171,13 +167,14 @@ object FfmpegExport {
             val s = toExportMs(joins, t.startMs)
             val e = toExportMs(joins, minOf(t.endMs, totalPreview))
             val next = "txt$j"
-            sb.append("[$curV][${files.size + j}:v]overlay=0:0:format=auto:enable='between(t,${sec(s)},${sec(e)})'[$next];")
+            sb.append("[$curV][${files.size + j}:v]overlay=0:0:format=auto:enable='between(t,${sec(s)},${sec(e)})':eof_action=repeat[$next];")
             curV = next
         }
 
         args += listOf(
             "-filter_complex", sb.toString().trimEnd(';'),
             "-map", "[$curV]", "-map", "[$curA]",
+            "-t", sec(exportMs),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p", "-r", "30",
             "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart",

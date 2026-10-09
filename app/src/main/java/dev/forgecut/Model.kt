@@ -242,6 +242,17 @@ class EditorState {
         }
     }
 
+    fun moveTextDelta(id: Long, dx: Float, dy: Float) {
+        val i = texts.indexOfFirst { it.id == id }
+        if (i >= 0) {
+            val cur = texts[i]
+            texts[i] = cur.copy(
+                posX = (cur.posX + dx).coerceIn(0.05f, 0.95f),
+                posY = (cur.posY + dy).coerceIn(0.05f, 0.95f)
+            )
+        }
+    }
+
     fun removeText(id: Long) {
         val i = texts.indexOfFirst { it.id == id }
         if (i >= 0) { snapshot(); texts.removeAt(i) }
@@ -266,6 +277,17 @@ class EditorState {
         if (i >= 0) {
             val cur = overlays[i]
             overlays[i] = cur.copy(posX = x.coerceIn(0.05f, 0.95f), posY = y.coerceIn(0.05f, 0.95f))
+        }
+    }
+
+    fun moveOverlayDelta(id: Long, dx: Float, dy: Float) {
+        val i = overlays.indexOfFirst { it.id == id }
+        if (i >= 0) {
+            val cur = overlays[i]
+            overlays[i] = cur.copy(
+                posX = (cur.posX + dx).coerceIn(0.05f, 0.95f),
+                posY = (cur.posY + dy).coerceIn(0.05f, 0.95f)
+            )
         }
     }
 
