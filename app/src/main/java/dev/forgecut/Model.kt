@@ -47,7 +47,24 @@ data class TextLayer(
     val endMs: Long,
     val color: Int,
     val size: TextSize,
-    val pos: TextPos,
+    val pos: TextPos = TextPos.BOTTOM,
+    val posX: Float = 0.5f,
+    val posY: Float = pos.frac,
+)
+
+enum class OverlayType { IMAGE, VIDEO }
+
+data class OverlayItem(
+    val id: Long,
+    val uri: Uri,
+    val type: OverlayType,
+    val startMs: Long,
+    val endMs: Long,
+    val posX: Float = 0.5f,
+    val posY: Float = 0.5f,
+    val scale: Float = 0.35f,
+    val durationMs: Long = 5000L,
+    val muted: Boolean = false,
 )
 
 data class Clip(
@@ -113,13 +130,19 @@ fun locate(clips: List<Clip>, globalMs: Long): Pair<Int, Long> {
     return clips.lastIndex to (last.lengthMs - 1).coerceAtLeast(0L)
 }
 
-private data class Snap(val clips: List<Clip>, val texts: List<TextLayer>)
+private data class Snap(
+    val clips: List<Clip>,
+    val texts: List<TextLayer>,
+    val overlays: List<OverlayItem>
+)
 
 class EditorState {
     val clips = mutableStateListOf<Clip>()
     val texts = mutableStateListOf<TextLayer>()
+    val overlays = mutableStateListOf<OverlayItem>()
     var selectedId by mutableStateOf<Long?>(null)
     var selectedTextId by mutableStateOf<Long?>(null)
+    var selectedOverlayId by mutableStateOf<Long?>(null)
     var canUndo by mutableStateOf(false)
         private set
 
@@ -134,7 +157,7 @@ class EditorState {
         }
 
     private fun snapshot() {
-        history.addLast(Snap(clips.toList(), texts.toList()))
+        history.addLast(Snap(clips.toList(), texts.toList(), overlays.toList()))
         if (history.size > 40) history.removeFirst()
         canUndo = true
     }
@@ -144,8 +167,10 @@ class EditorState {
         val p = history.removeLast()
         clips.clear(); clips.addAll(p.clips)
         texts.clear(); texts.addAll(p.texts)
+        overlays.clear(); overlays.addAll(p.overlays)
         if (clips.none { it.id == selectedId }) selectedId = null
         if (texts.none { it.id == selectedTextId }) selectedTextId = null
+        if (overlays.none { it.id == selectedOverlayId }) selectedOverlayId = null
         canUndo = history.isNotEmpty()
     }
 
@@ -197,17 +222,57 @@ class EditorState {
         clips[i] = clips[i].copy(transition = type, transitionMs = ms)
     }
 
-    fun addText(t: TextLayer) { snapshot(); texts.add(t); selectedTextId = t.id }
+    fun addText(t: TextLayer) {
+        snapshot()
+        texts.add(t)
+        selectedTextId = t.id
+        selectedOverlayId = null
+    }
 
     fun updateText(t: TextLayer) {
         val i = texts.indexOfFirst { it.id == t.id }
         if (i >= 0) { snapshot(); texts[i] = t }
     }
 
+    fun updateTextPosition(id: Long, x: Float, y: Float) {
+        val i = texts.indexOfFirst { it.id == id }
+        if (i >= 0) {
+            val cur = texts[i]
+            texts[i] = cur.copy(posX = x.coerceIn(0.05f, 0.95f), posY = y.coerceIn(0.05f, 0.95f))
+        }
+    }
+
     fun removeText(id: Long) {
         val i = texts.indexOfFirst { it.id == id }
         if (i >= 0) { snapshot(); texts.removeAt(i) }
         selectedTextId = null
+    }
+
+    fun addOverlay(o: OverlayItem) {
+        snapshot()
+        overlays.add(o)
+        selectedOverlayId = o.id
+        selectedTextId = null
+        selectedId = null
+    }
+
+    fun updateOverlay(o: OverlayItem) {
+        val i = overlays.indexOfFirst { it.id == o.id }
+        if (i >= 0) { snapshot(); overlays[i] = o }
+    }
+
+    fun updateOverlayPosition(id: Long, x: Float, y: Float) {
+        val i = overlays.indexOfFirst { it.id == id }
+        if (i >= 0) {
+            val cur = overlays[i]
+            overlays[i] = cur.copy(posX = x.coerceIn(0.05f, 0.95f), posY = y.coerceIn(0.05f, 0.95f))
+        }
+    }
+
+    fun removeOverlay(id: Long) {
+        val i = overlays.indexOfFirst { it.id == id }
+        if (i >= 0) { snapshot(); overlays.removeAt(i) }
+        selectedOverlayId = null
     }
 }
 
@@ -237,7 +302,19 @@ fun frameAt(ctx: Context, uri: Uri, ms: Long): ImageBitmap? = runCatching {
     val r = MediaMetadataRetriever()
     try {
         r.setDataSource(ctx, uri)
-        r.getScaledFrameAtTime(ms * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 240, 240)
+        r.getScaledFrameAtTime(ms * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 360, 360)
             ?.asImageBitmap()
     } finally { r.release() }
+}.getOrNull()
+
+fun loadBitmap(ctx: Context, uri: Uri, maxDim: Int = 800): ImageBitmap? = runCatching {
+    val opt = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    ctx.contentResolver.openInputStream(uri)?.use {
+        android.graphics.BitmapFactory.decodeStream(it, null, opt)
+    }
+    val sample = maxOf(1, maxOf(opt.outWidth, opt.outHeight) / maxDim)
+    val decodeOpt = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+    ctx.contentResolver.openInputStream(uri)?.use {
+        android.graphics.BitmapFactory.decodeStream(it, null, decodeOpt)?.asImageBitmap()
+    }
 }.getOrNull()

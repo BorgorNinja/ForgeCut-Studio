@@ -1,7 +1,11 @@
 package dev.forgecut
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -19,21 +23,27 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -44,6 +54,7 @@ fun EditorScreen(
     exporting: Boolean,
     snackbar: SnackbarHostState,
     onAdd: () -> Unit,
+    onAddOverlay: () -> Unit,
     onExport: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -161,8 +172,40 @@ fun EditorScreen(
                     val rectW = if (ar > maxWidth / maxHeight) maxWidth else maxHeight * ar
                     val rectH = rectW / ar
                     Box(Modifier.size(rectW, rectH).align(Alignment.Center)) {
+                        state.overlays.filter { globalPos >= it.startMs && globalPos < it.endMs }
+                            .forEach { ov ->
+                                PreviewOverlay(
+                                    ov = ov,
+                                    rectW = rectW,
+                                    rectH = rectH,
+                                    globalPos = globalPos,
+                                    isSelected = ov.id == state.selectedOverlayId,
+                                    onSelect = {
+                                        state.selectedOverlayId = ov.id
+                                        state.selectedTextId = null
+                                    },
+                                    onDragDelta = { dx, dy ->
+                                        state.updateOverlayPosition(ov.id, ov.posX + dx, ov.posY + dy)
+                                    }
+                                )
+                            }
+
                         state.texts.filter { globalPos >= it.startMs && globalPos < it.endMs }
-                            .forEach { PreviewText(it, rectH) }
+                            .forEach { t ->
+                                PreviewText(
+                                    t = t,
+                                    rectW = rectW,
+                                    rectH = rectH,
+                                    isSelected = t.id == state.selectedTextId,
+                                    onSelect = {
+                                        state.selectedTextId = t.id
+                                        state.selectedOverlayId = null
+                                    },
+                                    onDragDelta = { dx, dy ->
+                                        state.updateTextPosition(t.id, t.posX + dx, t.posY + dy)
+                                    }
+                                )
+                            }
                     }
                 }
             }
@@ -198,11 +241,19 @@ fun EditorScreen(
                     state = state, scroll = scroll, dpPerSec = dpPerSec,
                     onSeekClip = { id, rel ->
                         state.selectedTextId = null
+                        state.selectedOverlayId = null
                         val start = state.clips.takeWhile { it.id != id }.sumOf { it.lengthMs }
                         seekToMs(start + rel)
                     },
                     onJoinClick = { joinIndex = it },
-                    onTextClick = { state.selectedTextId = it },
+                    onTextClick = {
+                        state.selectedTextId = it
+                        state.selectedOverlayId = null
+                    },
+                    onOverlayClick = {
+                        state.selectedOverlayId = it
+                        state.selectedTextId = null
+                    },
                 )
 
                 // ── Tools ──
@@ -211,10 +262,19 @@ fun EditorScreen(
                     shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
+                    val oIdx = state.overlays.indexOfFirst { it.id == state.selectedOverlayId }
                     val tIdx = state.texts.indexOfFirst { it.id == state.selectedTextId }
                     val sel = state.selectedIndex
                     Column(Modifier.padding(top = 8.dp, bottom = 8.dp)) {
-                        if (tIdx >= 0) {
+                        if (oIdx >= 0) {
+                            OverlayPanel(
+                                ov = state.overlays[oIdx],
+                                totalMs = state.totalMs,
+                                onChange = { state.updateOverlay(it) },
+                                onDelete = { state.removeOverlay(state.overlays[oIdx].id) },
+                                onDone = { state.selectedOverlayId = null }
+                            )
+                        } else if (tIdx >= 0) {
                             TextPanel(
                                 t = state.texts[tIdx], totalMs = state.totalMs,
                                 onChange = { state.updateText(it) },
@@ -261,6 +321,7 @@ fun EditorScreen(
                                 }
                                 ToolButton(Icons.Default.Tune, "Trim", highlight = showTrim) { showTrim = !showTrim }
                                 ToolButton(Icons.Default.TextFields, "Text") { editExisting = false; showTextDialog = true }
+                                ToolButton(Icons.Default.Layers, "Overlay") { onAddOverlay() }
                                 ToolButton(Icons.Default.ContentCopy, "Duplicate") { state.duplicate(sel) }
                                 ToolButton(
                                     if (c.muted) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
@@ -346,22 +407,186 @@ private fun TextPanel(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PreviewText(t: TextLayer, rectH: Dp) {
-    val d = LocalDensity.current
-    val fontSp = with(d) { (t.size.frac * rectH.toPx()).toSp() }
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-        Text(
-            t.text, color = Color(t.color), fontSize = fontSp, fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-            style = TextStyle(shadow = Shadow(Color.Black, Offset(2f, 2f), 6f)),
-            modifier = Modifier.fillMaxWidth(0.9f).layout { m, c ->
-                val p = m.measure(c.copy(minHeight = 0))
-                layout(p.width, c.maxHeight) {
-                    p.placeRelative(0, (t.pos.frac * c.maxHeight - p.height / 2f).toInt())
+private fun OverlayPanel(
+    ov: OverlayItem, totalMs: Long,
+    onChange: (OverlayItem) -> Unit, onDelete: () -> Unit, onDone: () -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    var range by remember(ov.id, ov.startMs, ov.endMs) { mutableStateOf(ov.startMs.toFloat()..ov.endMs.toFloat()) }
+    Column {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Starts ${fmt(range.start.toLong())}", style = MaterialTheme.typography.labelMedium)
+            Text("Size ${(ov.scale * 100).toInt()}%",
+                style = MaterialTheme.typography.labelMedium, color = cs.primary)
+            Text("Ends ${fmt(range.endInclusive.toLong())}", style = MaterialTheme.typography.labelMedium)
+        }
+        RangeSlider(
+            value = range,
+            onValueChange = { range = it },
+            valueRange = 0f..totalMs.toFloat().coerceAtLeast(1f),
+            onValueChangeFinished = {
+                val s = range.start.toLong(); val e = range.endInclusive.toLong()
+                if (e - s >= MIN_CLIP_MS) onChange(ov.copy(startMs = s, endMs = e))
+                else range = ov.startMs.toFloat()..ov.endMs.toFloat()
+            },
+            modifier = Modifier.padding(horizontal = 12.dp)
+        )
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
+            ToolButton(Icons.Default.ZoomIn, "Scale +") {
+                onChange(ov.copy(scale = (ov.scale + 0.05f).coerceAtMost(0.95f)))
+            }
+            ToolButton(Icons.Default.ZoomOut, "Scale -") {
+                onChange(ov.copy(scale = (ov.scale - 0.05f).coerceAtLeast(0.15f)))
+            }
+            if (ov.type == OverlayType.VIDEO) {
+                ToolButton(
+                    if (ov.muted) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
+                    if (ov.muted) "Unmute" else "Mute"
+                ) {
+                    onChange(ov.copy(muted = !ov.muted))
                 }
             }
+            ToolButton(Icons.Default.Delete, "Delete", onClick = onDelete)
+            ToolButton(Icons.Default.Done, "Done", highlight = true, onClick = onDone)
+        }
+    }
+}
+
+@Composable
+private fun PreviewText(
+    t: TextLayer,
+    rectW: Dp,
+    rectH: Dp,
+    isSelected: Boolean,
+    onSelect: () -> Unit,
+    onDragDelta: (Float, Float) -> Unit,
+) {
+    val d = LocalDensity.current
+    val fontSp = with(d) { (t.size.frac * rectH.toPx()).toSp() }
+    val rectWPx = with(d) { rectW.toPx() }
+    val rectHPx = with(d) { rectH.toPx() }
+
+    Box(
+        Modifier
+            .offset {
+                IntOffset(
+                    (t.posX * rectWPx).toInt(),
+                    (t.posY * rectHPx).toInt()
+                )
+            }
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints.copy(minWidth = 0, minHeight = 0))
+                layout(placeable.width, placeable.height) {
+                    placeable.placeRelative(-placeable.width / 2, -placeable.height / 2)
+                }
+            }
+            .then(
+                if (isSelected) Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp))
+                    .padding(4.dp)
+                else Modifier.padding(4.dp)
+            )
+            .pointerInput(t.id, rectWPx, rectHPx) {
+                detectTapGestures { onSelect() }
+            }
+            .pointerInput(t.id, rectWPx, rectHPx) {
+                detectDragGestures(
+                    onDragStart = { onSelect() },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        onDragDelta(dragAmount.x / rectWPx, dragAmount.y / rectHPx)
+                    }
+                )
+            }
+    ) {
+        Text(
+            t.text,
+            color = Color(t.color),
+            fontSize = fontSp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            style = TextStyle(shadow = Shadow(Color.Black, Offset(2f, 2f), 6f))
         )
+    }
+}
+
+@Composable
+private fun PreviewOverlay(
+    ov: OverlayItem,
+    rectW: Dp,
+    rectH: Dp,
+    globalPos: Long,
+    isSelected: Boolean,
+    onSelect: () -> Unit,
+    onDragDelta: (Float, Float) -> Unit,
+) {
+    val ctx = LocalContext.current
+    val d = LocalDensity.current
+    val rectWPx = with(d) { rectW.toPx() }
+    val rectHPx = with(d) { rectH.toPx() }
+    val ovW = rectW * ov.scale
+
+    val relMs = (globalPos - ov.startMs).coerceAtLeast(0L)
+    val imageBitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(
+        null, ov.uri, if (ov.type == OverlayType.VIDEO) relMs / 500L else 0L
+    ) {
+        value = withContext(Dispatchers.IO) {
+            if (ov.type == OverlayType.IMAGE) {
+                loadBitmap(ctx, ov.uri, 800)
+            } else {
+                frameAt(ctx, ov.uri, relMs)
+            }
+        }
+    }
+
+    Box(
+        Modifier
+            .offset {
+                IntOffset(
+                    (ov.posX * rectWPx).toInt(),
+                    (ov.posY * rectHPx).toInt()
+                )
+            }
+            .width(ovW)
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints)
+                layout(placeable.width, placeable.height) {
+                    placeable.placeRelative(-placeable.width / 2, -placeable.height / 2)
+                }
+            }
+            .then(
+                if (isSelected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(6.dp))
+                else Modifier
+            )
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color.DarkGray.copy(alpha = 0.5f))
+            .pointerInput(ov.id, rectWPx, rectHPx) {
+                detectTapGestures { onSelect() }
+            }
+            .pointerInput(ov.id, rectWPx, rectHPx) {
+                detectDragGestures(
+                    onDragStart = { onSelect() },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        onDragDelta(dragAmount.x / rectWPx, dragAmount.y / rectHPx)
+                    }
+                )
+            }
+    ) {
+        val bmp = imageBitmap
+        if (bmp != null) {
+            Image(
+                bmp,
+                contentDescription = "Overlay",
+                modifier = Modifier.fillMaxWidth(),
+                contentScale = ContentScale.Fit
+            )
+        } else {
+            Box(Modifier.fillMaxWidth().height(60.dp), contentAlignment = Alignment.Center) {
+                Text(if (ov.type == OverlayType.IMAGE) "Image" else "Video", fontSize = 12.sp, color = Color.White)
+            }
+        }
     }
 }
 

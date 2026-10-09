@@ -51,7 +51,7 @@ class MainActivity : ComponentActivity() {
         var useH265 by remember { mutableStateOf(false) }
         val ffmpegReady = remember { FfmpegExport.binary(ctx) != null }
 
-        fun needsFfmpeg() = state.texts.isNotEmpty() || state.clips.any { it.transition != TransitionType.NONE }
+        fun needsFfmpeg() = state.texts.isNotEmpty() || state.overlays.isNotEmpty() || state.clips.any { it.transition != TransitionType.NONE }
         fun say(msg: String) { scope.launch { snackbar.showSnackbar(msg) } }
 
         val picker = rememberLauncherForActivityResult(
@@ -73,6 +73,34 @@ class MainActivity : ComponentActivity() {
             picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
         }
 
+        val overlayPicker = rememberLauncherForActivityResult(
+            ActivityResultContracts.PickVisualMedia()
+        ) { uri ->
+            if (uri != null) {
+                scope.launch {
+                    val p = withContext(Dispatchers.IO) { probe(ctx, uri) }
+                    val isVid = p != null && p.durationMs > 0
+                    val dur = if (isVid) p!!.durationMs else 5000L
+                    val curPos = player.currentPosition.coerceAtLeast(0L)
+                    val s = if (state.totalMs > 0) minOf(curPos, (state.totalMs - 500L).coerceAtLeast(0L)) else 0L
+                    val e = if (state.totalMs > 0) minOf(s + dur, state.totalMs).coerceAtLeast(s + 500L) else s + dur
+                    val item = OverlayItem(
+                        id = IdGen.next(),
+                        uri = uri,
+                        type = if (isVid) OverlayType.VIDEO else OverlayType.IMAGE,
+                        startMs = s,
+                        endMs = e,
+                        durationMs = dur,
+                        muted = false
+                    )
+                    state.addOverlay(item)
+                }
+            }
+        }
+        val pickOverlay = {
+            overlayPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+        }
+
         LaunchedEffect(exporting) {
             val holder = ProgressHolder()
             while (exporting) {
@@ -88,12 +116,13 @@ class MainActivity : ComponentActivity() {
         EditorScreen(
             state = state, player = player, exporting = exporting, snackbar = snackbar,
             onAdd = pick,
+            onAddOverlay = pickOverlay,
             onExport = {
                 player.pause()
                 if (needsFfmpeg() && !ffmpegReady) {
                     scope.launch {
                         snackbar.showSnackbar(
-                            "Titles and transitions need the FFmpeg engine. Run “Build FFmpeg” on GitHub once, then rebuild (see README).",
+                            "Titles, overlays and transitions need the FFmpeg engine. Run “Build FFmpeg” on GitHub once, then rebuild (see README).",
                             duration = SnackbarDuration.Long
                         )
                     }
@@ -130,7 +159,7 @@ class MainActivity : ComponentActivity() {
                             scope.launch {
                                 val out = File(ctx.cacheDir, "forgecut_${System.currentTimeMillis()}.mp4")
                                 val res = withContext(Dispatchers.IO) {
-                                    FfmpegExport.run(ctx, clips, state.texts.toList(), out,
+                                    FfmpegExport.run(ctx, clips, state.texts.toList(), state.overlays.toList(), out,
                                         onProcess = { ffProcess = it }, onProgress = { progress = it })
                                 }
                                 ffProcess = null

@@ -50,11 +50,12 @@ fun Timeline(
     onSeekClip: (clipId: Long, relMs: Long) -> Unit,
     onJoinClick: (Int) -> Unit,
     onTextClick: (Long) -> Unit,
+    onOverlayClick: (Long) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     val dpPerMs = dpPerSec / 1000f
 
-    BoxWithConstraints(Modifier.fillMaxWidth().height(150.dp)) {
+    BoxWithConstraints(Modifier.fillMaxWidth().height(175.dp)) {
         val half = maxWidth / 2
         val total = msToDp(state.totalMs, dpPerMs)
 
@@ -68,7 +69,7 @@ fun Timeline(
                         key(c.id) {
                             TimelineClip(
                                 c, msToDp(c.lengthMs, dpPerMs), dpPerMs,
-                                selected = c.id == state.selectedId && state.selectedTextId == null
+                                selected = c.id == state.selectedId && state.selectedTextId == null && state.selectedOverlayId == null
                             ) { rel -> onSeekClip(c.id, rel) }
                         }
                     }
@@ -92,13 +93,13 @@ fun Timeline(
 
                 if (state.texts.isEmpty()) {
                     Text("Text track — tap “Text” to add a title", fontSize = 11.sp,
-                        color = cs.onSurfaceVariant, modifier = Modifier.offset(x = 6.dp, y = 106.dp))
+                        color = cs.onSurfaceVariant, modifier = Modifier.offset(x = 6.dp, y = 102.dp))
                 }
                 state.texts.forEach { t ->
                     val sel = t.id == state.selectedTextId
                     Box(
-                        Modifier.offset(x = msToDp(t.startMs, dpPerMs), y = 100.dp)
-                            .width(msToDp(t.endMs - t.startMs, dpPerMs).coerceAtLeast(28.dp)).height(30.dp)
+                        Modifier.offset(x = msToDp(t.startMs, dpPerMs), y = 96.dp)
+                            .width(msToDp(t.endMs - t.startMs, dpPerMs).coerceAtLeast(28.dp)).height(28.dp)
                             .clip(RoundedCornerShape(6.dp))
                             .background(if (sel) cs.primary else cs.secondaryContainer)
                             .clickable { onTextClick(t.id) }
@@ -107,6 +108,27 @@ fun Timeline(
                     ) {
                         Text(t.text, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             color = if (sel) Color.White else cs.onSecondaryContainer)
+                    }
+                }
+
+                if (state.overlays.isEmpty()) {
+                    Text("Overlay track — tap “Overlay” to add PIP", fontSize = 11.sp,
+                        color = cs.onSurfaceVariant, modifier = Modifier.offset(x = 6.dp, y = 134.dp))
+                }
+                state.overlays.forEach { ov ->
+                    val sel = ov.id == state.selectedOverlayId
+                    Box(
+                        Modifier.offset(x = msToDp(ov.startMs, dpPerMs), y = 128.dp)
+                            .width(msToDp(ov.endMs - ov.startMs, dpPerMs).coerceAtLeast(28.dp)).height(28.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (sel) cs.tertiary else cs.tertiaryContainer)
+                            .clickable { onOverlayClick(ov.id) }
+                            .padding(horizontal = 6.dp),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        val lbl = if (ov.type == OverlayType.IMAGE) "Image PIP" else "Video PIP"
+                        Text(lbl, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            color = if (sel) Color.White else cs.onTertiaryContainer)
                     }
                 }
             }

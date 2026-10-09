@@ -23,7 +23,9 @@ fun renderTextPng(layer: TextLayer, w: Int, h: Int, out: File) {
     val layout = StaticLayout.Builder.obtain(layer.text, 0, layer.text.length, paint, width)
         .setAlignment(Layout.Alignment.ALIGN_CENTER)
         .build()
-    canvas.translate(w * 0.05f, layer.pos.frac * h - layout.height / 2f)
+    val cx = layer.posX * w
+    val cy = layer.posY * h
+    canvas.translate(cx - layout.width / 2f, cy - layout.height / 2f)
     paint.style = Paint.Style.STROKE
     paint.strokeWidth = paint.textSize * 0.12f
     paint.strokeJoin = Paint.Join.ROUND

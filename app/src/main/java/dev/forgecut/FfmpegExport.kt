@@ -16,6 +16,7 @@ object FfmpegExport {
         ctx: Context,
         clips: List<Clip>,
         texts: List<TextLayer>,
+        overlays: List<OverlayItem> = emptyList(),
         out: File,
         onProcess: (Process) -> Unit,
         onProgress: (Float) -> Unit,
@@ -52,9 +53,25 @@ object FfmpegExport {
                 t to f
             }
 
+        val activeOverlays = overlays.filter { it.startMs < totalPreview }
+        val ovFiles = activeOverlays.mapIndexedNotNull { j, ov ->
+            val f = File(work, "ov$j")
+            val copied = ctx.contentResolver.openInputStream(ov.uri)?.use { ins ->
+                f.outputStream().use { ins.copyTo(it) }
+            }
+            if (copied != null && copied > 0) ov to f else null
+        }
+
         val args = mutableListOf(bin.absolutePath, "-y", "-loglevel", "error", "-nostats", "-progress", "pipe:1")
         files.forEach { args += listOf("-i", it.absolutePath) }
         titles.forEach { args += listOf("-i", it.second.absolutePath) }
+        ovFiles.forEach { (ov, f) ->
+            if (ov.type == OverlayType.IMAGE) {
+                args += listOf("-loop", "1", "-i", f.absolutePath)
+            } else {
+                args += listOf("-i", f.absolutePath)
+            }
+        }
 
         // An input pad can only be used once, so split sources used by several clips
         val vUses = IntArray(files.size)
@@ -120,10 +137,40 @@ object FfmpegExport {
             curA = na
         }
 
+        val ovInputBase = files.size + titles.size
+        ovFiles.forEachIndexed { j, (ov, _) ->
+            val inputIdx = ovInputBase + j
+            val s = toExportMs(joins, ov.startMs)
+            val e = toExportMs(joins, minOf(ov.endMs, totalPreview))
+            val durSec = sec(ov.endMs - ov.startMs)
+            val targetW = (w * ov.scale).toInt() / 2 * 2
+            val padV = "ov_sc$j"
+            val nextV = "nov$j"
+
+            if (ov.type == OverlayType.IMAGE) {
+                sb.append("[$inputIdx:v]scale=$targetW:-2,fps=30,format=yuv420p[$padV];")
+            } else {
+                sb.append("[$inputIdx:v]trim=start=0:end=$durSec,setpts=PTS-STARTPTS,scale=$targetW:-2,fps=30,format=yuv420p[$padV];")
+            }
+            sb.append("[$curV][$padV]overlay=x='min(max(0,${w}*${ov.posX}-w/2),${w}-w)':y='min(max(0,${h}*${ov.posY}-h/2),${h}-h)':enable='between(t,${sec(s)},${sec(e)})'[$nextV];")
+            curV = nextV
+
+            if (ov.type == OverlayType.VIDEO && !ov.muted) {
+                val hasAud = probe(ctx, ov.uri)?.hasAudio == true
+                if (hasAud) {
+                    val nextA = "noa$j"
+                    val sMs = s.coerceAtLeast(0L)
+                    sb.append("[$inputIdx:a]atrim=start=0:end=$durSec,asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,adelay=${sMs}|${sMs}[ov_aud$j];")
+                    sb.append("[$curA][ov_aud$j]amix=inputs=2:duration=first:dropout_transition=0[$nextA];")
+                    curA = nextA
+                }
+            }
+        }
+
         titles.forEachIndexed { j, (t, _) ->
             val s = toExportMs(joins, t.startMs)
             val e = toExportMs(joins, minOf(t.endMs, totalPreview))
-            val next = "ov$j"
+            val next = "txt$j"
             sb.append("[$curV][${files.size + j}:v]overlay=0:0:format=auto:enable='between(t,${sec(s)},${sec(e)})'[$next];")
             curV = next
         }
